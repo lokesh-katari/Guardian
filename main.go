@@ -20,20 +20,18 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/joho/godotenv"
 )
 
 // Configuration struct for app settings
 type Config struct {
-	TelegramToken  string
-	ChatID         string
-	AuthLogPath    string
-	CameraDevice   int
-	CheckInterval  int
-	SaveDir        string
-	StealthMode    bool
-	PatternStrings []string
+	TelegramToken  string   `json:"telegram_token"`
+	ChatID         string   `json:"chat_id"`
+	AuthLogPath    string   `json:"auth_log_path"`
+	CameraDevice   int      `json:"camera_device"`
+	CheckInterval  int      `json:"check_interval"`
+	SaveDir        string   `json:"save_dir"`
+	StealthMode    bool     `json:"stealth_mode"`
+	PatternStrings []string `json:"pattern_strings"`
 }
 
 // Global variables
@@ -48,8 +46,8 @@ var (
 // Initialize configuration with default values
 func initConfig() Config {
 	return Config{
-		TelegramToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
-		ChatID:        os.Getenv("CHAT_ID"),
+		TelegramToken: "YOUR_TELEGRAM_BOT_TOKEN", // Replace with your token
+		ChatID:        "YOUR_CHAT_ID",            // Replace with your chat ID
 		AuthLogPath:   "/var/log/auth.log",
 		CameraDevice:  0,
 		CheckInterval: 2,
@@ -65,21 +63,70 @@ func initConfig() Config {
 	}
 }
 
+// Load configuration from JSON file
+func loadConfig(filename string) (Config, error) {
+	config := initConfig()
+
+	// Check if config file exists
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		logger.Printf("Config file %s not found, using default configuration", filename)
+		return config, nil
+	}
+
+	// Read config file
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return config, fmt.Errorf("error reading config file: %v", err)
+	}
+
+	// Parse JSON
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		return config, fmt.Errorf("error parsing config file: %v", err)
+	}
+
+	logger.Printf("Configuration loaded from %s", filename)
+	return config, nil
+}
+
+// Save configuration to JSON file
+func saveConfig(config Config, filename string) error {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error marshaling config: %v", err)
+	}
+
+	err = ioutil.WriteFile(filename, data, 0600)
+	if err != nil {
+		return fmt.Errorf("error writing config file: %v", err)
+	}
+
+	logger.Printf("Configuration saved to %s", filename)
+	return nil
+}
+
 // Initialize the logger
 func initLogger() {
 	// Create log directory if it doesn't exist
-	os.MkdirAll("logs", 0755)
+	logDir := "logs"
+	if _, err := os.Stat("/opt/security-bot"); err == nil {
+		logDir = "/opt/security-bot/logs"
+	}
+	os.MkdirAll(logDir, 0755)
 
 	// Open log file
 	var err error
-	logFile, err = os.OpenFile("logs/security_bot.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logPath := filepath.Join(logDir, "security_bot.log")
+	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("Failed to open log file: %v", err)
 	}
 
 	// Create multi-writer to write logs to both stdout and file
 	multiWriter := io.MultiWriter(os.Stdout, logFile)
-	logger = log.New(multiWriter, "", log.LstdFlags)
+	logger = log.New(multiWriter, "[SECURITY-BOT] ", log.LstdFlags|log.Lshortfile)
+
+	logger.Println("Logger initialized")
 }
 
 // Cleanup resources before exit
@@ -615,7 +662,7 @@ func setupWebhook(webhookURL string) error {
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("failed to set webhook: %s, %s", resp.Status, string(body))
 	}
-	//
+
 	logger.Println("Webhook set successfully")
 	return nil
 }
@@ -636,23 +683,33 @@ func checkV4l2Ctl() bool {
 
 // Main function
 func main() {
-	// Initialize logger
-
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-
+	// Initialize logger first
 	initLogger()
 	defer cleanup()
+
+	// Parse command line arguments
+	configFile := "config.json"
+	if len(os.Args) > 1 {
+		configFile = os.Args[1]
+	}
 
 	// Check if running as root
 	if os.Geteuid() != 0 {
 		logger.Fatal("This script requires root privileges to access auth logs. Please run with sudo.")
 	}
 
-	// Initialize configuration
-	config = initConfig()
+	// Load configuration
+	var err error
+	config, err = loadConfig(configFile)
+	if err != nil {
+		logger.Printf("Error loading config: %v. Using defaults.", err)
+		config = initConfig()
+	}
+
+	// Validate configuration
+	if config.TelegramToken == "YOUR_TELEGRAM_BOT_TOKEN" || config.ChatID == "YOUR_CHAT_ID" {
+		logger.Fatal("Please configure your Telegram token and chat ID in the configuration")
+	}
 
 	// Check required dependencies
 	if !checkFfmpeg() {
@@ -677,21 +734,19 @@ func main() {
 		hostname = "unknown"
 	}
 
-	var stealthModeStatus string
-	if config.StealthMode {
-		stealthModeStatus = "Enabled"
-	} else {
-		stealthModeStatus = "Disabled"
-	}
 	startupMessage := fmt.Sprintf("🔒 Security monitoring started on *%s* 🔒\n"+
 		"I'll notify you about failed login attempts\\.\n"+
-		"Stealth camera mode: *%s*",
+		"Stealth camera mode: *%s*\n"+
+		"Service mode: *%s*",
 		escapeTelegramMarkdown(hostname),
-		escapeTelegramMarkdown(stealthModeStatus))
+		escapeTelegramMarkdown(fmt.Sprintf("%t", config.StealthMode)),
+		escapeTelegramMarkdown("SystemD"))
 
 	err = sendTelegramMessage(startupMessage)
 	if err != nil {
 		logger.Printf("Failed to send startup notification: %v", err)
+	} else {
+		logger.Println("Startup notification sent to Telegram")
 	}
 
 	// Set up HTTP server for bot commands
@@ -706,11 +761,20 @@ func main() {
 	wg.Add(1)
 	go monitorLogs()
 
+	logger.Println("Security bot is now running. Monitoring for failed login attempts...")
+
 	// Wait for termination signal
 	<-sigs
-	logger.Println("Received termination signal. Shutting down...")
+	logger.Println("Received termination signal. Shutting down gracefully...")
+
+	// Send shutdown notification
+	shutdownMessage := fmt.Sprintf("🔒 Security monitoring stopped on *%s* 🔒",
+		escapeTelegramMarkdown(hostname))
+	sendTelegramMessage(shutdownMessage)
 
 	// Stop monitoring
 	monitoring = false
 	wg.Wait()
+
+	logger.Println("Security bot stopped")
 }
