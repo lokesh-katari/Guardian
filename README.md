@@ -12,6 +12,7 @@ A lightweight security monitoring daemon that detects failed login attempts on y
 - **Zero Configuration**: Simple one-time setup with interactive script
 
 ## 🏗️ Architecture
+![image](https://github.com/user-attachments/assets/42480828-7fa0-411e-9c64-96ac856530c8)
 
 ## 🛠️ Prerequisites
 
@@ -107,18 +108,6 @@ sudo /opt/security-bot/manage.sh enable
 # Disable auto-start at boot
 sudo /opt/security-bot/manage.sh disable
 ```
-
-## 📁 Directory Structure
-
-```
-/opt/security-bot/
-├── security_bot           # Main binary
-├── security-bot.env       # Environment configuration
-├── manage.sh             # Management script
-└── logs/                 # Application logs
-
-```
-
 ## ⚙️ Configuration
 
 ### Environment Variables
